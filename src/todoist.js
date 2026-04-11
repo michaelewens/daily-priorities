@@ -1,17 +1,15 @@
 const BASE = 'https://api.todoist.com/api/v1';
 
-function headers(token) {
-  return {
-    'Authorization': `Bearer ${token}`,
-    'Content-Type': 'application/json',
-    'X-Request-Id': crypto.randomUUID(),
-  };
+function headers(token, hasBody) {
+  const h = { 'Authorization': `Bearer ${token}` };
+  if (hasBody) h['Content-Type'] = 'application/json';
+  return h;
 }
 
 async function request(method, path, token, body) {
   const res = await fetch(`${BASE}${path}`, {
     method,
-    headers: headers(token),
+    headers: headers(token, !!body),
     body: body ? JSON.stringify(body) : undefined,
   });
   if (res.status === 204) return null;
