@@ -142,7 +142,7 @@ function TaskItem({task,section,onComplete,onMove,onDelete,onEdit,isDragging,onD
             {isPast?`${Math.abs(dDays)}d overdue`:dDays===0?'today':`${dDays}d`}
           </Badge>}
           {isStale&&<Badge color={c.textFaint}>{staleDays}d untouched</Badge>}
-          {section!=='done'&&!startsWithVerb(task.content)&&<Badge color={c.accent} bg={c.accentDim}>needs verb</Badge>}
+          {section!=='done'&&!startsWithVerb(task.content)&&<Badge color={c.danger} bg={c.dangerDim}>needs verb</Badge>}
           {needsBreak&&<Badge color={c.danger} bg={c.dangerDim}>break down or archive</Badge>}
         </div>
       </div>
