@@ -1,4 +1,4 @@
-const BASE = 'https://api.todoist.com/rest/v2';
+const BASE = 'https://todoist-proxy.michael-ewens.workers.dev/rest/v2';
 
 function headers(token) {
   return {
