@@ -1,4 +1,4 @@
-const BASE = 'https://api.todoist.com/api/v1';
+const BASE = 'https://todoist-proxy.michael-ewens.workers.dev/api/v1';
 
 function headers(token, hasBody) {
   const h = { 'Authorization': `Bearer ${token}` };
