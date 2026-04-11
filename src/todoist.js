@@ -46,6 +46,7 @@ export const createSection = (token, projectId, name, order) => request('POST', 
 export const getTasks = (token, projectId) => requestAll(`/tasks?project_id=${projectId}`, token);
 export const createTask = (token, content, opts = {}) => request('POST', '/tasks', token, { content, ...opts });
 export const updateTask = (token, id, opts) => request('POST', `/tasks/${id}`, token, opts);
+export const moveTask = (token, id, sectionId) => request('POST', `/tasks/${id}/move`, token, { section_id: sectionId });
 export const closeTask = (token, id) => request('POST', `/tasks/${id}/close`, token);
 export const deleteTask = (token, id) => request('DELETE', `/tasks/${id}`, token);
 

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { ensureSetup, getTasks, createTask as apiCreateTask, updateTask, closeTask, deleteTask as apiDeleteTask } from './todoist';
+import { ensureSetup, getTasks, createTask as apiCreateTask, updateTask, moveTask as apiMoveTask, closeTask, deleteTask as apiDeleteTask } from './todoist';
 
 const MAX_TODAY = 3;
 const MAX_ACTIVE = 30;
@@ -301,7 +301,7 @@ export default function App() {
     const om=loadJson(ORDER_KEY,{});
     om[id]={...om[id],lastMoved:new Date().toISOString(),rolloverCount:toSec==='today'?0:(om[id]?.rolloverCount||0)};
     saveJson(ORDER_KEY,om);
-    try{await updateTask(token,id,{section_id:sid});await fetchTasks();}catch(e){setError(e.message);}
+    try{await apiMoveTask(token,id,sid);await fetchTasks();}catch(e){setError(e.message);}
   },[token,setup,enriched,fetchTasks]);
 
   const handleDelete = useCallback(async(id)=>{
