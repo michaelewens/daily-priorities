@@ -17,6 +17,13 @@ const todayStr = () => new Date().toISOString().slice(0, 10);
 const parseDeadline = (t) => { const m = t.match(/#deadline:(\d{4}-\d{2}-\d{2})/); return m ? m[1] : null; };
 const parseProject = (t) => { const m = t.match(/@(\w+)/); return m ? m[1] : null; };
 const cleanTitle = (t) => t.replace(/#deadline:\d{4}-\d{2}-\d{2}/g, '').replace(/@\w+/g, '').trim();
+const COMMON_VERBS = ['draft','write','send','email','review','read','edit','update','fix','build','create','schedule','prep','prepare','grade','submit','call','meet','plan','research','analyze','finish','complete','set','run','check','follow','ask','share','organize','archive','merge','test','deploy','book','cancel','order','buy','file','sign','approve','respond','reply','discuss','outline','revise','upload','download','move','add','remove','delete','assign','design','map','present','pitch','negotiate','clean','configure','install','debug','refactor','push','pull','commit','tag','label','prioritize','delegate','hire','fire','interview','onboard','train','mentor','coach','teach','record','transcribe','summarize','compile','format','print','scan','copy','paste','rename','sort','filter','search','find','look','explore','brainstorm','sketch','mock','prototype','launch','ship','release','announce','publish','post','tweet','message','slack','text','ping','invite','schedule','register','attend','rsvp','confirm','verify','validate','audit','reconcile','calculate','estimate','forecast','budget','invoice','pay','reimburse','transfer','deposit','withdraw','renew','extend','upgrade','downgrade','migrate','backup','restore','sync','connect','disconnect','unsubscribe','cancel','close','open','start','stop','pause','resume','restart','reboot','reset','undo','redo','retry','rerun','resubmit'];
+function startsWithVerb(text) {
+  if (!text) return true;
+  const first = text.trim().split(/\s/)[0]?.toLowerCase().replace(/[^a-z]/g, '');
+  if (!first) return true;
+  return COMMON_VERBS.includes(first);
+}
 function loadJson(key, fb) { try { return JSON.parse(localStorage.getItem(key)) || fb; } catch { return fb; } }
 function saveJson(key, v) { localStorage.setItem(key, JSON.stringify(v)); }
 
@@ -135,6 +142,7 @@ function TaskItem({task,section,onComplete,onMove,onDelete,onEdit,isDragging,onD
             {isPast?`${Math.abs(dDays)}d overdue`:dDays===0?'today':`${dDays}d`}
           </Badge>}
           {isStale&&<Badge color={c.textFaint}>{staleDays}d untouched</Badge>}
+          {section!=='done'&&!startsWithVerb(task.content)&&<Badge color={c.accent} bg={c.accentDim}>needs verb</Badge>}
           {needsBreak&&<Badge color={c.danger} bg={c.dangerDim}>break down or archive</Badge>}
         </div>
       </div>
@@ -203,13 +211,19 @@ function AddTask({onAdd,section,placeholder}) {
   const c = useColors();
   const [v,setV] = useState('');
   const go = ()=>{if(v.trim()){onAdd(v.trim(),section);setV('');}};
+  const showHint = v.trim().length > 2 && !startsWithVerb(v);
   return (
     <div style={{padding:'4px 12px'}}>
       <input value={v} onChange={e=>setV(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')go();}}
         placeholder={placeholder||'+ Add task (@label #deadline:YYYY-MM-DD)'}
-        style={{width:'100%',background:'transparent',border:'none',borderBottom:`1px solid ${c.border}`,color:c.textMuted,padding:'6px 0',fontSize:12,fontFamily:"'IBM Plex Sans',sans-serif",outline:'none',boxSizing:'border-box'}}
+        style={{width:'100%',background:'transparent',border:'none',borderBottom:`1px solid ${showHint?c.accent:c.border}`,color:c.textMuted,padding:'6px 0',fontSize:12,fontFamily:"'IBM Plex Sans',sans-serif",outline:'none',boxSizing:'border-box'}}
         onFocus={e=>e.target.style.borderBottomColor=c.accent}
-        onBlur={e=>e.target.style.borderBottomColor=c.border}/>
+        onBlur={e=>{if(!showHint)e.target.style.borderBottomColor=c.border;}}/>
+      {showHint && (
+        <div style={{fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:c.accent,marginTop:3,opacity:0.8}}>
+          Start with a verb — e.g. "Draft…" "Review…" "Email…" "Send…"
+        </div>
+      )}
     </div>
   );
 }
@@ -248,6 +262,19 @@ export default function App() {
   },[token,setup]);
 
   useEffect(()=>{fetchTasks();},[fetchTasks]);
+
+  // Auto-refresh: on tab focus + every 60s
+  useEffect(()=>{
+    const onFocus = ()=>{fetchTasks();};
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden)onFocus();});
+    window.addEventListener('focus',onFocus);
+    const interval = setInterval(fetchTasks, 60000);
+    return ()=>{
+      document.removeEventListener('visibilitychange',onFocus);
+      window.removeEventListener('focus',onFocus);
+      clearInterval(interval);
+    };
+  },[fetchTasks]);
 
   useEffect(()=>{
     const last=localStorage.getItem(LAST_DATE_KEY);
@@ -347,12 +374,12 @@ export default function App() {
           <Section id="active" label="Active" tasks={allTasks} cap={MAX_ACTIVE}
             onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
             dragState={dragState} setDragState={setDragState}>
-            <AddTask onAdd={addTask} section="active" placeholder="+ Add to active (@label #deadline:YYYY-MM-DD)"/>
+            <AddTask onAdd={addTask} section="active" placeholder="+ Draft… Review… Send… (@label #deadline:YYYY-MM-DD)"/>
           </Section>
           <Section id="inbox" label="Inbox" tasks={allTasks} collapsed={true} urgentCount={urgent('inbox')}
             onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
             dragState={dragState} setDragState={setDragState}>
-            <AddTask onAdd={addTask} section="inbox" placeholder="+ Quick capture"/>
+            <AddTask onAdd={addTask} section="inbox" placeholder="+ Quick capture (start with a verb)"/>
           </Section>
           <Section id="waiting" label="Waiting" tasks={allTasks} collapsed={true} urgentCount={urgent('waiting')}
             onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
