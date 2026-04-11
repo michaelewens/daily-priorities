@@ -1,4 +1,4 @@
-const BASE = 'https://todoist-proxy.michael-ewens.workers.dev/rest/v2';
+const BASE = 'https://api.todoist.com/api/v1';
 
 function headers(token) {
   return {
@@ -22,23 +22,37 @@ async function request(method, path, token, body) {
   return res.json();
 }
 
+async function requestAll(path, token) {
+  let all = [];
+  let cursor = null;
+  do {
+    const sep = path.includes('?') ? '&' : '?';
+    const url = cursor ? `${path}${sep}cursor=${cursor}` : path;
+    const data = await request('GET', url, token);
+    if (Array.isArray(data)) return data;
+    all = all.concat(data.results || data);
+    cursor = data.next_cursor || null;
+  } while (cursor);
+  return all;
+}
+
 // Projects
-export const getProjects = (token) => request('GET', '/projects', token);
+export const getProjects = (token) => requestAll('/projects', token);
 export const createProject = (token, name) => request('POST', '/projects', token, { name });
 
 // Sections
-export const getSections = (token, projectId) => request('GET', `/sections?project_id=${projectId}`, token);
+export const getSections = (token, projectId) => requestAll(`/sections?project_id=${projectId}`, token);
 export const createSection = (token, projectId, name, order) => request('POST', '/sections', token, { project_id: projectId, name, order });
 
 // Tasks
-export const getTasks = (token, projectId) => request('GET', `/tasks?project_id=${projectId}`, token);
+export const getTasks = (token, projectId) => requestAll(`/tasks?project_id=${projectId}`, token);
 export const createTask = (token, content, opts = {}) => request('POST', '/tasks', token, { content, ...opts });
 export const updateTask = (token, id, opts) => request('POST', `/tasks/${id}`, token, opts);
 export const closeTask = (token, id) => request('POST', `/tasks/${id}/close`, token);
 export const deleteTask = (token, id) => request('DELETE', `/tasks/${id}`, token);
 
 // Labels
-export const getLabels = (token) => request('GET', '/labels', token);
+export const getLabels = (token) => requestAll('/labels', token);
 export const createLabel = (token, name) => request('POST', '/labels', token, { name });
 
 // Setup: ensure project + sections exist
