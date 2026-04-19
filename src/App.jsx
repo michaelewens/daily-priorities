@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ensureSetup, getTasks, createTask as apiCreateTask, updateTask, moveTask as apiMoveTask, closeTask, deleteTask as apiDeleteTask } from './todoist';
-import { fetchEvents, getCachedEvents, normalizeIcsUrl, serializeRadarMetadata, parseRadarMetadata } from './ical';
+import { fetchAllEvents, getCachedEventsMulti, normalizeIcsUrl, serializeRadarMetadata, parseRadarMetadata } from './ical';
 
 const MAX_TODAY = 3;
 const MAX_ACTIVE = 30;
@@ -12,7 +12,28 @@ const ORDER_KEY = 'dps_order';
 const LOG_KEY = 'dps_log';
 const LAST_DATE_KEY = 'dps_last_date';
 const DONE_KEY = 'dps_done';
-const ICAL_URL_KEY = 'dps_ical_url';
+const ICAL_URL_KEY = 'dps_ical_url'; // legacy single-URL
+const ICAL_URLS_KEY = 'dps_ical_urls'; // array of {label, url}
+
+function loadIcalUrls() {
+  // Prefer new array format; migrate legacy single-URL on the fly.
+  try {
+    const raw = localStorage.getItem(ICAL_URLS_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) return parsed.filter(e => e && e.url);
+    }
+  } catch { /* ignore */ }
+  const legacy = localStorage.getItem(ICAL_URL_KEY);
+  if (legacy) return [{ label: '', url: legacy }];
+  return [];
+}
+
+function saveIcalUrls(entries) {
+  const cleaned = (entries || []).filter(e => e && e.url).map(e => ({ label: (e.label || '').trim(), url: e.url.trim() }));
+  localStorage.setItem(ICAL_URLS_KEY, JSON.stringify(cleaned));
+  localStorage.removeItem(ICAL_URL_KEY); // drop legacy once we've written the new format
+}
 
 const daysBetween = (a, b) => Math.round((b - a) / 86400000);
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -230,25 +251,41 @@ function AddTask({onAdd,section,placeholder}) {
   );
 }
 
-function SettingsModal({ token, icalUrl, onSave, onClose, onDisconnect }) {
+function SettingsModal({ token, icalUrls, onSave, onClose, onDisconnect }) {
   const c = useColors();
   const [t, setT] = useState(token || '');
-  const [u, setU] = useState(icalUrl || '');
+  const initial = icalUrls && icalUrls.length ? icalUrls : [{ label: '', url: '' }];
+  const [rows, setRows] = useState(initial.map(e => ({ label: e.label || '', url: e.url || '' })));
+  const update = (i, patch) => setRows(rs => rs.map((r, idx) => idx === i ? { ...r, ...patch } : r));
+  const addRow = () => setRows(rs => [...rs, { label: '', url: '' }]);
+  const removeRow = (i) => setRows(rs => rs.length === 1 ? [{ label: '', url: '' }] : rs.filter((_, idx) => idx !== i));
   const save = () => {
-    onSave({ token: t.trim(), icalUrl: normalizeIcsUrl(u) });
+    const cleaned = rows
+      .map(r => ({ label: r.label.trim(), url: normalizeIcsUrl(r.url) }))
+      .filter(r => r.url);
+    onSave({ token: t.trim(), icalUrls: cleaned });
     onClose();
   };
   return (
-    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
-      <div onClick={e=>e.stopPropagation()} style={{background:c.bg,border:`1px solid ${c.border}`,borderRadius:8,padding:24,width:'100%',maxWidth:440}}>
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100,padding:20}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:c.bg,border:`1px solid ${c.border}`,borderRadius:8,padding:24,width:'100%',maxWidth:520,maxHeight:'90vh',overflowY:'auto'}}>
         <div style={{fontSize:14,fontWeight:500,color:c.text,marginBottom:16}}>Settings</div>
         <div style={{fontSize:11,color:c.textMuted,marginBottom:4,fontFamily:"'IBM Plex Mono',monospace",textTransform:'uppercase',letterSpacing:'0.05em'}}>Todoist token</div>
         <input value={t} onChange={e=>setT(e.target.value)} placeholder="Todoist API token"
           style={{width:'100%',padding:'8px 10px',background:c.surface,border:`1px solid ${c.border}`,borderRadius:6,color:c.text,fontSize:12,fontFamily:"'IBM Plex Mono',monospace",outline:'none',boxSizing:'border-box',marginBottom:16}}/>
-        <div style={{fontSize:11,color:c.textMuted,marginBottom:4,fontFamily:"'IBM Plex Mono',monospace",textTransform:'uppercase',letterSpacing:'0.05em'}}>Calendar iCal URL (optional)</div>
-        <div style={{fontSize:11,color:c.textFaint,marginBottom:6,lineHeight:1.5}}>Google Calendar → Settings → your calendar → Secret address in iCal format. webcal:// is accepted.</div>
-        <input value={u} onChange={e=>setU(e.target.value)} placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
-          style={{width:'100%',padding:'8px 10px',background:c.surface,border:`1px solid ${c.border}`,borderRadius:6,color:c.text,fontSize:12,fontFamily:"'IBM Plex Mono',monospace",outline:'none',boxSizing:'border-box'}}/>
+        <div style={{fontSize:11,color:c.textMuted,marginBottom:4,fontFamily:"'IBM Plex Mono',monospace",textTransform:'uppercase',letterSpacing:'0.05em'}}>Calendars (iCal URLs)</div>
+        <div style={{fontSize:11,color:c.textFaint,marginBottom:10,lineHeight:1.5}}>Google Calendar → Settings → [calendar] → Secret address in iCal format. Label shows as a tag next to events. webcal:// accepted.</div>
+        {rows.map((r, i) => (
+          <div key={i} style={{display:'flex',gap:6,marginBottom:8,alignItems:'center'}}>
+            <input value={r.label} onChange={e=>update(i,{label:e.target.value})} placeholder="Label"
+              style={{width:90,padding:'8px 10px',background:c.surface,border:`1px solid ${c.border}`,borderRadius:6,color:c.text,fontSize:12,fontFamily:"'IBM Plex Sans',sans-serif",outline:'none',boxSizing:'border-box'}}/>
+            <input value={r.url} onChange={e=>update(i,{url:e.target.value})} placeholder="https://calendar.google.com/calendar/ical/…"
+              style={{flex:1,padding:'8px 10px',background:c.surface,border:`1px solid ${c.border}`,borderRadius:6,color:c.text,fontSize:12,fontFamily:"'IBM Plex Mono',monospace",outline:'none',boxSizing:'border-box',minWidth:0}}/>
+            <button onClick={()=>removeRow(i)} title="Remove"
+              style={{width:28,height:28,background:'transparent',border:`1px solid ${c.border}`,borderRadius:6,color:c.textFaint,fontSize:14,cursor:'pointer'}}>×</button>
+          </div>
+        ))}
+        <button onClick={addRow} style={{marginTop:4,padding:'6px 10px',background:'transparent',border:`1px dashed ${c.border}`,borderRadius:6,color:c.textMuted,fontSize:11,cursor:'pointer',fontFamily:"'IBM Plex Sans',sans-serif"}}>+ Add calendar</button>
         <div style={{display:'flex',gap:8,marginTop:20}}>
           <button onClick={save} style={{flex:1,padding:'8px 12px',background:c.accent,color:'#1a1a1e',border:'none',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:"'IBM Plex Sans',sans-serif"}}>Save</button>
           <button onClick={onClose} style={{padding:'8px 12px',background:'transparent',border:`1px solid ${c.border}`,color:c.textMuted,borderRadius:6,fontSize:12,cursor:'pointer',fontFamily:"'IBM Plex Sans',sans-serif"}}>Cancel</button>
@@ -314,7 +351,7 @@ function RadarPanel({ tasks, onUnpin, unpinInFlight }) {
   );
 }
 
-function CalendarPanel({ events, pinnedIds, onPin, onUnpinByInstance, pinInFlight, loading, error, onRetry }) {
+function CalendarPanel({ events, pinnedIds, onPin, onUnpinByInstance, pinInFlight, loading, error, onRetry, showSource }) {
   const c = useColors();
   const byDay = new Map();
   const dayLabel = (d) => {
@@ -368,7 +405,10 @@ function CalendarPanel({ events, pinnedIds, onPin, onUnpinByInstance, pinInFligh
                   {pinned ? '★' : '☆'}
                 </button>
                 <div style={{fontSize:11,fontFamily:"'IBM Plex Mono',monospace",color:c.textMuted,minWidth:64,letterSpacing:'0.03em'}}>{timeStr}</div>
-                <div style={{flex:1,fontSize:13,color:c.text,lineHeight:1.4,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.title}</div>
+                <div style={{flex:1,fontSize:13,color:c.text,lineHeight:1.4,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+                  {showSource && ev.source && <span style={{fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:c.textMuted,background:c.surfaceHover,padding:'1px 5px',borderRadius:3,marginRight:6,letterSpacing:'0.03em',textTransform:'uppercase'}}>{ev.source}</span>}
+                  {ev.title}
+                </div>
               </div>
             );
           })}
@@ -387,8 +427,8 @@ export default function App() {
   const [loading,setLoading] = useState(false);
   const [error,setError] = useState('');
   const [dragState,setDragState] = useState({dragging:null,overTask:null,overSection:null});
-  const [icalUrl,setIcalUrl] = useState(()=>localStorage.getItem(ICAL_URL_KEY)||'');
-  const [events,setEvents] = useState(()=>icalUrl?getCachedEvents(icalUrl):[]);
+  const [icalUrls,setIcalUrls] = useState(()=>loadIcalUrls());
+  const [events,setEvents] = useState(()=>getCachedEventsMulti(icalUrls));
   const [icsLoading,setIcsLoading] = useState(false);
   const [icsError,setIcsError] = useState('');
   const [settingsOpen,setSettingsOpen] = useState(false);
@@ -512,14 +552,14 @@ export default function App() {
   const pinnedIds = useMemo(()=>new Set(radarTasks.map(t=>parseRadarMetadata(t.description)?.id).filter(Boolean)),[radarTasks]);
 
   const refetchEvents = useCallback(async(opts={})=>{
-    if(!icalUrl){setEvents([]);return;}
+    if(!icalUrls || icalUrls.length===0){setEvents([]);return;}
     setIcsLoading(true);
     try{
-      const ev = await fetchEvents(icalUrl, opts);
+      const ev = await fetchAllEvents(icalUrls, opts);
       setEvents(ev); setIcsError('');
     }catch(e){ setIcsError(e.message); }
     setIcsLoading(false);
-  },[icalUrl]);
+  },[icalUrls]);
 
   useEffect(()=>{refetchEvents();},[refetchEvents]);
 
@@ -576,11 +616,9 @@ export default function App() {
     try{ await closeTask(token,taskId); await fetchTasks(); }catch(e){ setError(e.message); }
   },[token,radarTasks,unpinByInstance,fetchTasks]);
 
-  const saveSettings = useCallback(({token: newToken, icalUrl: newIcal})=>{
-    if(newIcal !== icalUrl){
-      if(newIcal) localStorage.setItem(ICAL_URL_KEY,newIcal); else localStorage.removeItem(ICAL_URL_KEY);
-      setIcalUrl(newIcal);
-    }
+  const saveSettings = useCallback(({token: newToken, icalUrls: newUrls})=>{
+    saveIcalUrls(newUrls);
+    setIcalUrls(newUrls);
     if(newToken && newToken !== token){
       (async()=>{
         try{
@@ -590,11 +628,12 @@ export default function App() {
         }catch(e){ setError(e.message); }
       })();
     }
-  },[token,icalUrl]);
+  },[token]);
 
   const disconnectAll = useCallback(()=>{
-    localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SETUP_KEY); localStorage.removeItem(ICAL_URL_KEY);
-    setToken(''); setSetup(null); setIcalUrl(''); setEvents([]);
+    localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SETUP_KEY);
+    localStorage.removeItem(ICAL_URL_KEY); localStorage.removeItem(ICAL_URLS_KEY);
+    setToken(''); setSetup(null); setIcalUrls([]); setEvents([]);
   },[]);
 
   const log=loadJson(LOG_KEY,[]);
@@ -615,7 +654,7 @@ export default function App() {
     <ThemeCtx.Provider value={colors}>
       <link href={fontLink} rel="stylesheet"/>
       <div style={{minHeight:'100vh',background:colors.bg,color:colors.text,fontFamily:"'IBM Plex Sans',sans-serif",padding:'40px 0',display:'flex',justifyContent:'center'}}>
-        <div style={{width:'100%',maxWidth:icalUrl?760:560,padding:'0 20px'}}>
+        <div style={{width:'100%',maxWidth:(icalUrls.length>0)?760:560,padding:'0 20px'}}>
           <div style={{marginBottom:32,display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
             <div>
               <div style={{fontSize:12,fontFamily:"'IBM Plex Mono',monospace",color:colors.textFaint,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>{todayDate}</div>
@@ -636,7 +675,7 @@ export default function App() {
                 onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
                 dragState={dragState} setDragState={setDragState} accentColor={colors.accent}/>
             </div>
-            {icalUrl && (
+            {icalUrls.length > 0 && (
               <div style={{flex:'1 1 320px',minWidth:280}}>
                 <RadarPanel tasks={radarTasks} onUnpin={unpinById} unpinInFlight={pinInFlight}/>
               </div>
@@ -648,8 +687,8 @@ export default function App() {
             dragState={dragState} setDragState={setDragState}>
             <AddTask onAdd={addTask} section="active" placeholder="+ Draft… Review… Send… (@label #deadline:YYYY-MM-DD)"/>
           </Section>
-          {icalUrl && (
-            <CalendarPanel events={events} pinnedIds={pinnedIds}
+          {icalUrls.length > 0 && (
+            <CalendarPanel events={events} pinnedIds={pinnedIds} showSource={icalUrls.length > 1}
               onPin={pinEvent} onUnpinByInstance={unpinByInstance} pinInFlight={pinInFlight}
               loading={icsLoading} error={icsError} onRetry={()=>refetchEvents({force:true})}/>
           )}
@@ -678,7 +717,7 @@ export default function App() {
         </div>
       </div>
       {settingsOpen && (
-        <SettingsModal token={token} icalUrl={icalUrl}
+        <SettingsModal token={token} icalUrls={icalUrls}
           onSave={saveSettings} onClose={()=>setSettingsOpen(false)} onDisconnect={disconnectAll}/>
       )}
     </ThemeCtx.Provider>

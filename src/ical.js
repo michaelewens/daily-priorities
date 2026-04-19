@@ -1,13 +1,11 @@
 import ICAL from 'ical.js';
 
 const PROXY_BASE = 'https://todoist-proxy.michael-ewens.workers.dev';
-const CACHE_KEY = 'dps_ics_cache';
-const THROTTLE_MS = 5 * 60 * 1000;
+const CACHE_PREFIX = 'dps_ics_cache_';
+const THROTTLE_MS = 15 * 60 * 1000;
 const WINDOW_DAYS = 5;
 
-let lastFetchAt = 0;
-let lastFetchUrl = '';
-let inFlight = null;
+const throttleMap = new Map(); // url -> { lastFetchAt, inFlight }
 
 export function normalizeIcsUrl(raw) {
   if (!raw) return '';
@@ -17,12 +15,18 @@ export function normalizeIcsUrl(raw) {
   return trimmed;
 }
 
-function loadCache() {
+function cacheKey(url) {
+  let h = 5381;
+  for (let i = 0; i < url.length; i++) h = ((h << 5) + h + url.charCodeAt(i)) | 0;
+  return CACHE_PREFIX + (h >>> 0).toString(36);
+}
+
+function loadCache(url) {
   try {
-    const raw = localStorage.getItem(CACHE_KEY);
+    const raw = localStorage.getItem(cacheKey(url));
     if (!raw) return null;
-    const { url, events, at } = JSON.parse(raw);
-    return { url, events: events || [], at: at || 0 };
+    const { events, at } = JSON.parse(raw);
+    return { events: events || [], at: at || 0 };
   } catch {
     return null;
   }
@@ -30,30 +34,34 @@ function loadCache() {
 
 function saveCache(url, events) {
   try {
-    localStorage.setItem(CACHE_KEY, JSON.stringify({ url, events, at: Date.now() }));
+    localStorage.setItem(cacheKey(url), JSON.stringify({ events, at: Date.now() }));
   } catch (e) { void e; /* localStorage full or unavailable */ }
 }
 
-export function getCachedEvents(url) {
-  const c = loadCache();
-  if (!c || c.url !== url) return [];
-  return c.events;
+export function getCachedEventsMulti(entries) {
+  const all = [];
+  for (const entry of entries) {
+    const url = normalizeIcsUrl(entry.url);
+    if (!url) continue;
+    const c = loadCache(url);
+    if (!c) continue;
+    for (const ev of c.events) all.push({ ...ev, source: entry.label || '' });
+  }
+  all.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  return all;
 }
 
-export async function fetchEvents(rawUrl, { force = false } = {}) {
-  const url = normalizeIcsUrl(rawUrl);
-  if (!url) return [];
-
+async function fetchOne(url, { force } = {}) {
+  const state = throttleMap.get(url) || { lastFetchAt: 0, inFlight: null };
   const now = Date.now();
-  const urlChanged = url !== lastFetchUrl;
-  const stale = now - lastFetchAt > THROTTLE_MS;
-  if (!force && !urlChanged && !stale && inFlight) return inFlight;
-  if (!force && !urlChanged && !stale) {
-    const cached = getCachedEvents(url);
-    if (cached.length) return cached;
+  const stale = now - state.lastFetchAt > THROTTLE_MS;
+  if (!force && !stale && state.inFlight) return state.inFlight;
+  if (!force && !stale) {
+    const cached = loadCache(url);
+    if (cached?.events?.length) return cached.events;
   }
 
-  inFlight = (async () => {
+  state.inFlight = (async () => {
     const res = await fetch(`${PROXY_BASE}/api/ical`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -65,17 +73,38 @@ export async function fetchEvents(rawUrl, { force = false } = {}) {
     }
     const icsText = await res.text();
     const events = parseEvents(icsText);
-    lastFetchAt = Date.now();
-    lastFetchUrl = url;
+    state.lastFetchAt = Date.now();
     saveCache(url, events);
     return events;
   })();
+  throttleMap.set(url, state);
 
   try {
-    return await inFlight;
+    return await state.inFlight;
   } finally {
-    inFlight = null;
+    state.inFlight = null;
   }
+}
+
+export async function fetchAllEvents(entries, opts = {}) {
+  if (!entries || entries.length === 0) return [];
+  const results = await Promise.allSettled(
+    entries.map(async (entry) => {
+      const url = normalizeIcsUrl(entry.url);
+      if (!url) return [];
+      const events = await fetchOne(url, opts);
+      return events.map(ev => ({ ...ev, source: entry.label || '' }));
+    })
+  );
+  const errors = [];
+  const merged = [];
+  results.forEach((r, i) => {
+    if (r.status === 'fulfilled') merged.push(...r.value);
+    else errors.push(`${entries[i].label || entries[i].url}: ${r.reason.message}`);
+  });
+  merged.sort((a, b) => (a.start < b.start ? -1 : a.start > b.start ? 1 : 0));
+  if (merged.length === 0 && errors.length > 0) throw new Error(errors.join('; '));
+  return merged;
 }
 
 function toIso(t) {
@@ -203,6 +232,7 @@ export function serializeRadarMetadata(event) {
   if (event.end) lines.push(`radar-end:${event.end}`);
   lines.push(`radar-all-day:${event.allDay ? 'true' : 'false'}`);
   if (event.title) lines.push(`radar-title:${event.title}`);
+  if (event.source) lines.push(`radar-source:${event.source}`);
   return lines.join('\n');
 }
 
@@ -221,6 +251,7 @@ export function parseRadarMetadata(description) {
     else if (key === 'end') out.end = val;
     else if (key === 'all-day') out.allDay = val === 'true';
     else if (key === 'title') out.title = val;
+    else if (key === 'source') out.source = val;
   }
   if (!out.id) return null;
   return out;
