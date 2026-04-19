@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { ensureSetup, getTasks, createTask as apiCreateTask, updateTask, moveTask as apiMoveTask, closeTask, deleteTask as apiDeleteTask } from './todoist';
+import { fetchEvents, getCachedEvents, normalizeIcsUrl, serializeRadarMetadata, parseRadarMetadata } from './ical';
 
 const MAX_TODAY = 3;
 const MAX_ACTIVE = 30;
@@ -11,6 +12,7 @@ const ORDER_KEY = 'dps_order';
 const LOG_KEY = 'dps_log';
 const LAST_DATE_KEY = 'dps_last_date';
 const DONE_KEY = 'dps_done';
+const ICAL_URL_KEY = 'dps_ical_url';
 
 const daysBetween = (a, b) => Math.round((b - a) / 86400000);
 const todayStr = () => new Date().toISOString().slice(0, 10);
@@ -228,6 +230,154 @@ function AddTask({onAdd,section,placeholder}) {
   );
 }
 
+function SettingsModal({ token, icalUrl, onSave, onClose, onDisconnect }) {
+  const c = useColors();
+  const [t, setT] = useState(token || '');
+  const [u, setU] = useState(icalUrl || '');
+  const save = () => {
+    onSave({ token: t.trim(), icalUrl: normalizeIcsUrl(u) });
+    onClose();
+  };
+  return (
+    <div onClick={onClose} style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:100}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:c.bg,border:`1px solid ${c.border}`,borderRadius:8,padding:24,width:'100%',maxWidth:440}}>
+        <div style={{fontSize:14,fontWeight:500,color:c.text,marginBottom:16}}>Settings</div>
+        <div style={{fontSize:11,color:c.textMuted,marginBottom:4,fontFamily:"'IBM Plex Mono',monospace",textTransform:'uppercase',letterSpacing:'0.05em'}}>Todoist token</div>
+        <input value={t} onChange={e=>setT(e.target.value)} placeholder="Todoist API token"
+          style={{width:'100%',padding:'8px 10px',background:c.surface,border:`1px solid ${c.border}`,borderRadius:6,color:c.text,fontSize:12,fontFamily:"'IBM Plex Mono',monospace",outline:'none',boxSizing:'border-box',marginBottom:16}}/>
+        <div style={{fontSize:11,color:c.textMuted,marginBottom:4,fontFamily:"'IBM Plex Mono',monospace",textTransform:'uppercase',letterSpacing:'0.05em'}}>Calendar iCal URL (optional)</div>
+        <div style={{fontSize:11,color:c.textFaint,marginBottom:6,lineHeight:1.5}}>Google Calendar → Settings → your calendar → Secret address in iCal format. webcal:// is accepted.</div>
+        <input value={u} onChange={e=>setU(e.target.value)} placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
+          style={{width:'100%',padding:'8px 10px',background:c.surface,border:`1px solid ${c.border}`,borderRadius:6,color:c.text,fontSize:12,fontFamily:"'IBM Plex Mono',monospace",outline:'none',boxSizing:'border-box'}}/>
+        <div style={{display:'flex',gap:8,marginTop:20}}>
+          <button onClick={save} style={{flex:1,padding:'8px 12px',background:c.accent,color:'#1a1a1e',border:'none',borderRadius:6,fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:"'IBM Plex Sans',sans-serif"}}>Save</button>
+          <button onClick={onClose} style={{padding:'8px 12px',background:'transparent',border:`1px solid ${c.border}`,color:c.textMuted,borderRadius:6,fontSize:12,cursor:'pointer',fontFamily:"'IBM Plex Sans',sans-serif"}}>Cancel</button>
+        </div>
+        <button onClick={()=>{onDisconnect();onClose();}} style={{marginTop:12,background:'transparent',border:'none',color:c.textFaint,fontSize:10,fontFamily:"'IBM Plex Mono',monospace",cursor:'pointer',opacity:0.6}}>disconnect + clear</button>
+      </div>
+    </div>
+  );
+}
+
+function formatEventWhen(meta) {
+  if (!meta?.start) return '';
+  const start = new Date(meta.start);
+  if (isNaN(start.getTime())) return '';
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayMs = 86400000;
+  const dayIdx = Math.round((new Date(start.getFullYear(), start.getMonth(), start.getDate()) - today) / dayMs);
+  const dayLabel = dayIdx === 0 ? 'Today' : dayIdx === 1 ? 'Tomorrow' : start.toLocaleDateString('en-US', { weekday: 'short' });
+  if (meta.allDay) return dayLabel;
+  const timeLabel = start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase().replace(' ', '');
+  return `${dayLabel} ${timeLabel}`;
+}
+
+function RadarPanel({ tasks, onUnpin, unpinInFlight }) {
+  const c = useColors();
+  const items = tasks
+    .map(t => ({ task: t, meta: parseRadarMetadata(t.description) || {} }))
+    .sort((a, b) => {
+      const sa = a.meta.start ? new Date(a.meta.start).getTime() : Infinity;
+      const sb = b.meta.start ? new Date(b.meta.start).getTime() : Infinity;
+      return sa - sb;
+    });
+  return (
+    <div style={{marginBottom:24}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px'}}>
+        <span style={{fontSize:14,fontFamily:"'IBM Plex Mono',monospace",fontWeight:600,color:c.accent,letterSpacing:'0.08em',textTransform:'uppercase'}}>On My Radar</span>
+        <span style={{fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:c.textFaint}}>{items.length}</span>
+      </div>
+      <div style={{background:c.todayBg,borderRadius:8,border:`1px solid ${c.border}`,padding:'4px 0',minHeight:80}}>
+        {items.length === 0 && (
+          <div style={{padding:'20px 12px',fontSize:12,color:c.textFaint,fontStyle:'italic',textAlign:'center'}}>
+            Pin events from the calendar below
+          </div>
+        )}
+        {items.map(({ task, meta }) => (
+          <div key={task.id} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'8px 12px'}}>
+            <button onClick={() => onUnpin(task.id)} disabled={unpinInFlight.has(task.id)}
+              title="Unpin"
+              style={{width:18,height:18,minWidth:18,display:'flex',alignItems:'center',justifyContent:'center',background:'transparent',border:'none',color:c.accent,cursor:'pointer',marginTop:2,fontSize:12,opacity:unpinInFlight.has(task.id)?0.4:1}}>★</button>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,color:c.text,lineHeight:1.4}}>{meta.title || task.content}</div>
+              {meta.start && (
+                <div style={{fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:c.textMuted,marginTop:2,letterSpacing:'0.03em'}}>
+                  {formatEventWhen(meta)}{meta.allDay ? ' · all day' : ''}
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function CalendarPanel({ events, pinnedIds, onPin, onUnpinByInstance, pinInFlight, loading, error, onRetry }) {
+  const c = useColors();
+  const byDay = new Map();
+  const dayLabel = (d) => {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const delta = Math.round((new Date(d.getFullYear(), d.getMonth(), d.getDate()) - today) / 86400000);
+    if (delta === 0) return 'Today';
+    if (delta === 1) return 'Tomorrow';
+    return d.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  };
+  for (const ev of events) {
+    const start = new Date(ev.start);
+    if (isNaN(start.getTime())) continue;
+    const key = `${start.getFullYear()}-${start.getMonth()}-${start.getDate()}`;
+    if (!byDay.has(key)) byDay.set(key, { label: dayLabel(start), items: [] });
+    byDay.get(key).items.push(ev);
+  }
+  for (const group of byDay.values()) {
+    group.items.sort((a, b) => (a.allDay === b.allDay) ? new Date(a.start) - new Date(b.start) : (a.allDay ? -1 : 1));
+  }
+  return (
+    <div style={{marginBottom:12}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,padding:'6px 12px'}}>
+        <span style={{fontSize:11,fontFamily:"'IBM Plex Mono',monospace",fontWeight:600,color:c.textMuted,letterSpacing:'0.08em',textTransform:'uppercase'}}>Calendar — Next 5 Days</span>
+        {loading && <span style={{fontSize:10,color:c.textFaint}}>…</span>}
+      </div>
+      {error && (
+        <div style={{padding:'10px 12px',fontSize:11,color:c.danger,background:c.dangerDim,borderRadius:6,display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <span>Couldn't load calendar. {error}</span>
+          <button onClick={onRetry} style={{background:'transparent',border:'none',color:c.danger,cursor:'pointer',fontSize:11,fontFamily:"'IBM Plex Mono',monospace"}}>retry</button>
+        </div>
+      )}
+      {!error && events.length === 0 && !loading && (
+        <div style={{padding:'16px 12px',fontSize:12,color:c.textFaint,fontStyle:'italic'}}>No events in the next 5 days.</div>
+      )}
+      {[...byDay.values()].map((group) => (
+        <div key={group.label} style={{marginTop:8}}>
+          <div style={{fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:c.textFaint,letterSpacing:'0.08em',textTransform:'uppercase',padding:'4px 12px'}}>{group.label}</div>
+          {group.items.map(ev => {
+            const pinned = pinnedIds.has(ev.instanceId);
+            const busy = pinInFlight.has(ev.instanceId);
+            const start = new Date(ev.start);
+            const timeStr = ev.allDay ? 'all day' : start.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }).toLowerCase().replace(' ', '');
+            return (
+              <div key={ev.instanceId} style={{display:'flex',alignItems:'center',gap:10,padding:'6px 12px',borderRadius:6}}
+                onMouseEnter={e=>e.currentTarget.style.background=c.surfaceHover}
+                onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+                <button onClick={() => pinned ? onUnpinByInstance(ev.instanceId) : onPin(ev)} disabled={busy}
+                  title={pinned ? 'Unpin from radar' : 'Pin to radar'}
+                  style={{width:20,height:20,minWidth:20,background:'transparent',border:'none',color:pinned?c.accent:c.textFaint,cursor:'pointer',fontSize:13,opacity:busy?0.4:1}}>
+                  {pinned ? '★' : '☆'}
+                </button>
+                <div style={{fontSize:11,fontFamily:"'IBM Plex Mono',monospace",color:c.textMuted,minWidth:64,letterSpacing:'0.03em'}}>{timeStr}</div>
+                <div style={{flex:1,fontSize:13,color:c.text,lineHeight:1.4,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{ev.title}</div>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 export default function App() {
   const colors = useTheme();
   const [token,setToken] = useState(()=>localStorage.getItem(TOKEN_KEY)||'');
@@ -237,6 +387,13 @@ export default function App() {
   const [loading,setLoading] = useState(false);
   const [error,setError] = useState('');
   const [dragState,setDragState] = useState({dragging:null,overTask:null,overSection:null});
+  const [icalUrl,setIcalUrl] = useState(()=>localStorage.getItem(ICAL_URL_KEY)||'');
+  const [events,setEvents] = useState(()=>icalUrl?getCachedEvents(icalUrl):[]);
+  const [icsLoading,setIcsLoading] = useState(false);
+  const [icsError,setIcsError] = useState('');
+  const [settingsOpen,setSettingsOpen] = useState(false);
+  const [pinInFlight,setPinInFlight] = useState(()=>new Set());
+  const staleCleanedRef = useRef(false);
 
   const secIdToName = setup ? Object.fromEntries(Object.entries(setup.sectionMap).map(([k,v])=>[v,k])) : {};
   const orderMap = loadJson(ORDER_KEY,{});
@@ -262,6 +419,18 @@ export default function App() {
   },[token,setup]);
 
   useEffect(()=>{fetchTasks();},[fetchTasks]);
+
+  // Migrate legacy setups that predate the Radar section.
+  useEffect(()=>{
+    if(!token || !setup) return;
+    if(setup.sectionMap?.radar) return;
+    (async()=>{
+      try{
+        const s = await ensureSetup(token);
+        saveJson(SETUP_KEY,s); setSetup(s);
+      }catch(e){ void e; /* migration is best-effort */ }
+    })();
+  },[token,setup]);
 
   // Auto-refresh: on tab focus + every 60s
   useEffect(()=>{
@@ -339,6 +508,95 @@ export default function App() {
     try{await updateTask(token,id,{content});await fetchTasks();}catch(e){setError(e.message);}
   },[token,fetchTasks]);
 
+  const radarTasks = useMemo(()=>enriched.filter(t=>t._section==='radar'),[enriched]);
+  const pinnedIds = useMemo(()=>new Set(radarTasks.map(t=>parseRadarMetadata(t.description)?.id).filter(Boolean)),[radarTasks]);
+
+  const refetchEvents = useCallback(async(opts={})=>{
+    if(!icalUrl){setEvents([]);return;}
+    setIcsLoading(true);
+    try{
+      const ev = await fetchEvents(icalUrl, opts);
+      setEvents(ev); setIcsError('');
+    }catch(e){ setIcsError(e.message); }
+    setIcsLoading(false);
+  },[icalUrl]);
+
+  useEffect(()=>{refetchEvents();},[refetchEvents]);
+
+  useEffect(()=>{
+    if(staleCleanedRef.current || !token || !setup || tasks.length===0) return;
+    staleCleanedRef.current = true;
+    const now = Date.now();
+    const stale = radarTasks.filter(t=>{
+      const m = parseRadarMetadata(t.description);
+      if(!m) return false;
+      const end = m.end ? new Date(m.end).getTime() : (m.start ? new Date(m.start).getTime() : 0);
+      return end && end < now - 3600000;
+    });
+    if(stale.length===0) return;
+    (async()=>{
+      for(const t of stale){ try{ await closeTask(token,t.id); }catch(e){ void e; /* cleanup is best-effort */ } }
+      fetchTasks();
+    })();
+  },[tasks, radarTasks, token, setup, fetchTasks]);
+
+  const pinEvent = useCallback(async(event)=>{
+    if(!token||!setup?.sectionMap?.radar) return;
+    if(pinnedIds.has(event.instanceId)) return;
+    if(pinInFlight.has(event.instanceId)) return;
+    setPinInFlight(prev=>{const s=new Set(prev);s.add(event.instanceId);return s;});
+    try{
+      const opts = {
+        project_id: setup.projectId,
+        section_id: setup.sectionMap.radar,
+        description: serializeRadarMetadata(event),
+      };
+      if(event.allDay && event.start) opts.due_date = event.start.slice(0,10);
+      else if(event.start) opts.due_datetime = event.start;
+      await apiCreateTask(token, event.title || '(untitled event)', opts);
+      await fetchTasks();
+    }catch(e){ setError(e.message); }
+    finally{ setPinInFlight(prev=>{const s=new Set(prev);s.delete(event.instanceId);return s;}); }
+  },[token,setup,pinnedIds,pinInFlight,fetchTasks]);
+
+  const unpinByInstance = useCallback(async(instanceId)=>{
+    const task = radarTasks.find(t=>parseRadarMetadata(t.description)?.id===instanceId);
+    if(!task) return;
+    if(pinInFlight.has(instanceId)) return;
+    setPinInFlight(prev=>{const s=new Set(prev);s.add(instanceId);return s;});
+    try{ await closeTask(token,task.id); await fetchTasks(); }
+    catch(e){ setError(e.message); }
+    finally{ setPinInFlight(prev=>{const s=new Set(prev);s.delete(instanceId);return s;}); }
+  },[token,radarTasks,pinInFlight,fetchTasks]);
+
+  const unpinById = useCallback(async(taskId)=>{
+    const task = radarTasks.find(t=>t.id===taskId);
+    const instanceId = task ? parseRadarMetadata(task.description)?.id : null;
+    if(instanceId) return unpinByInstance(instanceId);
+    try{ await closeTask(token,taskId); await fetchTasks(); }catch(e){ setError(e.message); }
+  },[token,radarTasks,unpinByInstance,fetchTasks]);
+
+  const saveSettings = useCallback(({token: newToken, icalUrl: newIcal})=>{
+    if(newIcal !== icalUrl){
+      if(newIcal) localStorage.setItem(ICAL_URL_KEY,newIcal); else localStorage.removeItem(ICAL_URL_KEY);
+      setIcalUrl(newIcal);
+    }
+    if(newToken && newToken !== token){
+      (async()=>{
+        try{
+          const s = await ensureSetup(newToken);
+          localStorage.setItem(TOKEN_KEY,newToken); saveJson(SETUP_KEY,s);
+          setToken(newToken); setSetup(s);
+        }catch(e){ setError(e.message); }
+      })();
+    }
+  },[token,icalUrl]);
+
+  const disconnectAll = useCallback(()=>{
+    localStorage.removeItem(TOKEN_KEY); localStorage.removeItem(SETUP_KEY); localStorage.removeItem(ICAL_URL_KEY);
+    setToken(''); setSetup(null); setIcalUrl(''); setEvents([]);
+  },[]);
+
   const log=loadJson(LOG_KEY,[]);
   const rLog=log.filter(e=>new Date(e.date)>=new Date(Date.now()-7*86400000));
   const sum={committed:0,done:0,deferred:0};
@@ -357,25 +615,44 @@ export default function App() {
     <ThemeCtx.Provider value={colors}>
       <link href={fontLink} rel="stylesheet"/>
       <div style={{minHeight:'100vh',background:colors.bg,color:colors.text,fontFamily:"'IBM Plex Sans',sans-serif",padding:'40px 0',display:'flex',justifyContent:'center'}}>
-        <div style={{width:'100%',maxWidth:560,padding:'0 20px'}}>
+        <div style={{width:'100%',maxWidth:icalUrl?760:560,padding:'0 20px'}}>
           <div style={{marginBottom:32,display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
             <div>
               <div style={{fontSize:12,fontFamily:"'IBM Plex Mono',monospace",color:colors.textFaint,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>{todayDate}</div>
               <div style={{fontSize:22,fontWeight:300,color:colors.text}}>What matters today?</div>
             </div>
-            <button onClick={fetchTasks} title="Refresh"
-              style={{background:'transparent',border:'none',color:colors.textFaint,cursor:'pointer',fontSize:16,padding:8,opacity:loading?0.3:0.6}}>↻</button>
+            <div style={{display:'flex',gap:4}}>
+              <button onClick={()=>{fetchTasks();refetchEvents({force:true});}} title="Refresh"
+                style={{background:'transparent',border:'none',color:colors.textFaint,cursor:'pointer',fontSize:16,padding:8,opacity:loading?0.3:0.6}}>↻</button>
+              <button onClick={()=>setSettingsOpen(true)} title="Settings"
+                style={{background:'transparent',border:'none',color:colors.textFaint,cursor:'pointer',fontSize:16,padding:8,opacity:0.6}}>⚙</button>
+            </div>
           </div>
           {error&&<div style={{padding:'8px 12px',marginBottom:16,background:colors.dangerDim,borderRadius:6,fontSize:12,color:colors.danger}}>{error}</div>}
 
-          <Section id="today" label="Today" tasks={allTasks} cap={MAX_TODAY}
-            onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
-            dragState={dragState} setDragState={setDragState} accentColor={colors.accent}/>
+          <div style={{display:'flex',gap:16,alignItems:'flex-start',flexWrap:'wrap'}}>
+            <div style={{flex:'1 1 320px',minWidth:280}}>
+              <Section id="today" label="Today" tasks={allTasks} cap={MAX_TODAY}
+                onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
+                dragState={dragState} setDragState={setDragState} accentColor={colors.accent}/>
+            </div>
+            {icalUrl && (
+              <div style={{flex:'1 1 320px',minWidth:280}}>
+                <RadarPanel tasks={radarTasks} onUnpin={unpinById} unpinInFlight={pinInFlight}/>
+              </div>
+            )}
+          </div>
+
           <Section id="active" label="Active" tasks={allTasks} cap={MAX_ACTIVE}
             onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
             dragState={dragState} setDragState={setDragState}>
             <AddTask onAdd={addTask} section="active" placeholder="+ Draft… Review… Send… (@label #deadline:YYYY-MM-DD)"/>
           </Section>
+          {icalUrl && (
+            <CalendarPanel events={events} pinnedIds={pinnedIds}
+              onPin={pinEvent} onUnpinByInstance={unpinByInstance} pinInFlight={pinInFlight}
+              loading={icsLoading} error={icsError} onRetry={()=>refetchEvents({force:true})}/>
+          )}
           <Section id="inbox" label="Inbox" tasks={allTasks} collapsed={true} urgentCount={urgent('inbox')}
             onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
             dragState={dragState} setDragState={setDragState}>
@@ -395,13 +672,15 @@ export default function App() {
               {sum.deferred>0&&<span>↻ {sum.deferred} deferred</span>}
             </div>
           )}
-          <div style={{marginTop:16,fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:colors.textFaint,textAlign:'center',opacity:0.5,display:'flex',justifyContent:'space-between'}}>
-            <span>double-click to edit · drag to move</span>
-            <button onClick={()=>{localStorage.removeItem(TOKEN_KEY);localStorage.removeItem(SETUP_KEY);setToken('');setSetup(null);}}
-              style={{background:'transparent',border:'none',color:colors.textFaint,cursor:'pointer',fontSize:10,fontFamily:"'IBM Plex Mono',monospace",opacity:0.5}}>disconnect</button>
+          <div style={{marginTop:16,fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:colors.textFaint,textAlign:'center',opacity:0.5}}>
+            <span>double-click to edit · drag to move · ⚙ to set calendar</span>
           </div>
         </div>
       </div>
+      {settingsOpen && (
+        <SettingsModal token={token} icalUrl={icalUrl}
+          onSave={saveSettings} onClose={()=>setSettingsOpen(false)} onDisconnect={disconnectAll}/>
+      )}
     </ThemeCtx.Provider>
   );
 }
