@@ -29,6 +29,13 @@ function loadIcalUrls() {
   return [];
 }
 
+const CAL_PALETTE = ['#4a90d9', '#4ad9a0', '#8a5cd9', '#d95c8a', '#a0a04a', '#d9734a'];
+function buildColorMap(entries) {
+  const m = {};
+  (entries || []).forEach((e, i) => { if (e.label) m[e.label] = CAL_PALETTE[i % CAL_PALETTE.length]; });
+  return m;
+}
+
 function saveIcalUrls(entries) {
   const cleaned = (entries || []).filter(e => e && e.url).map(e => ({ label: (e.label || '').trim(), url: e.url.trim() }));
   localStorage.setItem(ICAL_URLS_KEY, JSON.stringify(cleaned));
@@ -310,7 +317,7 @@ function formatEventWhen(meta) {
   return `${dayLabel} ${timeLabel}`;
 }
 
-function RadarPanel({ tasks, onUnpin, unpinInFlight }) {
+function RadarPanel({ tasks, onUnpin, unpinInFlight, colorBySource }) {
   const c = useColors();
   const items = tasks
     .map(t => ({ task: t, meta: parseRadarMetadata(t.description) || {} }))
@@ -331,13 +338,18 @@ function RadarPanel({ tasks, onUnpin, unpinInFlight }) {
             Pin events from the calendar below
           </div>
         )}
-        {items.map(({ task, meta }) => (
+        {items.map(({ task, meta }) => {
+          const dot = meta.source && colorBySource?.[meta.source];
+          return (
           <div key={task.id} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'8px 12px'}}>
             <button onClick={() => onUnpin(task.id)} disabled={unpinInFlight.has(task.id)}
               title="Unpin"
               style={{width:18,height:18,minWidth:18,display:'flex',alignItems:'center',justifyContent:'center',background:'transparent',border:'none',color:c.accent,cursor:'pointer',marginTop:2,fontSize:12,opacity:unpinInFlight.has(task.id)?0.4:1}}>★</button>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:13,color:c.text,lineHeight:1.4}}>{meta.title || task.content}</div>
+              <div style={{fontSize:13,color:c.text,lineHeight:1.4}}>
+                {dot && <span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:dot,marginRight:8,verticalAlign:'middle'}}/>}
+                {meta.title || task.content}
+              </div>
               {meta.start && (
                 <div style={{fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:c.textMuted,marginTop:2,letterSpacing:'0.03em'}}>
                   {formatEventWhen(meta)}{meta.allDay ? ' · all day' : ''}
@@ -345,13 +357,14 @@ function RadarPanel({ tasks, onUnpin, unpinInFlight }) {
               )}
             </div>
           </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function CalendarPanel({ events, pinnedIds, onPin, onUnpinByInstance, pinInFlight, loading, error, onRetry, showSource }) {
+function CalendarPanel({ events, pinnedIds, onPin, onUnpinByInstance, pinInFlight, loading, error, onRetry, showSource, colorBySource }) {
   const c = useColors();
   const byDay = new Map();
   const dayLabel = (d) => {
@@ -406,7 +419,11 @@ function CalendarPanel({ events, pinnedIds, onPin, onUnpinByInstance, pinInFligh
                 </button>
                 <div style={{fontSize:11,fontFamily:"'IBM Plex Mono',monospace",color:c.textMuted,minWidth:64,letterSpacing:'0.03em'}}>{timeStr}</div>
                 <div style={{flex:1,fontSize:13,color:c.text,lineHeight:1.4,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
-                  {showSource && ev.source && <span style={{fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:c.textMuted,background:c.surfaceHover,padding:'1px 5px',borderRadius:3,marginRight:6,letterSpacing:'0.03em',textTransform:'uppercase'}}>{ev.source}</span>}
+                  {(() => {
+                    const col = ev.source && colorBySource?.[ev.source];
+                    if (!showSource || !ev.source) return col ? <span style={{display:'inline-block',width:7,height:7,borderRadius:'50%',background:col,marginRight:8,verticalAlign:'middle'}}/> : null;
+                    return <span style={{fontSize:10,fontFamily:"'IBM Plex Mono',monospace",color:col||c.textMuted,background:(col||c.textMuted)+'22',padding:'1px 5px',borderRadius:3,marginRight:6,letterSpacing:'0.03em',textTransform:'uppercase'}}>{ev.source}</span>;
+                  })()}
                   {ev.title}
                 </div>
               </div>
@@ -548,6 +565,7 @@ export default function App() {
     try{await updateTask(token,id,{content});await fetchTasks();}catch(e){setError(e.message);}
   },[token,fetchTasks]);
 
+  const colorBySource = useMemo(()=>buildColorMap(icalUrls),[icalUrls]);
   const radarTasks = useMemo(()=>enriched.filter(t=>t._section==='radar'),[enriched]);
   const pinnedIds = useMemo(()=>new Set(radarTasks.map(t=>parseRadarMetadata(t.description)?.id).filter(Boolean)),[radarTasks]);
 
@@ -677,7 +695,7 @@ export default function App() {
             </div>
             {icalUrls.length > 0 && (
               <div style={{flex:'1 1 320px',minWidth:280}}>
-                <RadarPanel tasks={radarTasks} onUnpin={unpinById} unpinInFlight={pinInFlight}/>
+                <RadarPanel tasks={radarTasks} onUnpin={unpinById} unpinInFlight={pinInFlight} colorBySource={colorBySource}/>
               </div>
             )}
           </div>
@@ -688,7 +706,7 @@ export default function App() {
             <AddTask onAdd={addTask} section="active" placeholder="+ Draft… Review… Send… (@label #deadline:YYYY-MM-DD)"/>
           </Section>
           {icalUrls.length > 0 && (
-            <CalendarPanel events={events} pinnedIds={pinnedIds} showSource={icalUrls.length > 1}
+            <CalendarPanel events={events} pinnedIds={pinnedIds} showSource={icalUrls.length > 1} colorBySource={colorBySource}
               onPin={pinEvent} onUnpinByInstance={unpinByInstance} pinInFlight={pinInFlight}
               loading={icsLoading} error={icsError} onRetry={()=>refetchEvents({force:true})}/>
           )}

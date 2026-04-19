@@ -7,6 +7,12 @@ const WINDOW_DAYS = 5;
 
 const throttleMap = new Map(); // url -> { lastFetchAt, inFlight }
 
+function extractOwnerEmail(url) {
+  const m = url.match(/\/ical\/([^/]+)\//);
+  if (!m) return '';
+  try { return decodeURIComponent(m[1]).toLowerCase(); } catch { return ''; }
+}
+
 export function normalizeIcsUrl(raw) {
   if (!raw) return '';
   const trimmed = raw.trim();
@@ -72,7 +78,7 @@ async function fetchOne(url, { force } = {}) {
       throw new Error(`ICS proxy ${res.status}: ${text}`);
     }
     const icsText = await res.text();
-    const events = parseEvents(icsText);
+    const events = parseEvents(icsText, { ownerEmail: extractOwnerEmail(url) });
     state.lastFetchAt = Date.now();
     saveCache(url, events);
     return events;
@@ -118,7 +124,21 @@ function toIso(t) {
   return t.toJSDate().toISOString();
 }
 
-function parseEvents(icsText) {
+function isDeclinedByOwner(vevent, ownerEmail) {
+  if (!ownerEmail) return false;
+  const attendees = vevent.getAllProperties('attendee');
+  for (const att of attendees) {
+    const val = att.getFirstValue();
+    if (!val) continue;
+    const email = (val.toString() || '').replace(/^mailto:/i, '').toLowerCase();
+    if (email !== ownerEmail) continue;
+    const partstat = (att.getParameter('partstat') || '').toString().toUpperCase();
+    return partstat === 'DECLINED';
+  }
+  return false;
+}
+
+function parseEvents(icsText, { ownerEmail = '' } = {}) {
   const jcal = ICAL.parse(icsText);
   const comp = new ICAL.Component(jcal);
   const vevents = comp.getAllSubcomponents('vevent');
@@ -144,6 +164,7 @@ function parseEvents(icsText) {
   for (const v of simpleAndMasters) {
     const event = new ICAL.Event(v);
     if ((v.getFirstPropertyValue('status') || '').toString().toUpperCase() === 'CANCELLED') continue;
+    if (isDeclinedByOwner(v, ownerEmail)) continue;
 
     if (event.isRecurring()) {
       const iter = event.iterator();
@@ -156,6 +177,7 @@ function parseEvents(icsText) {
         if (overrides.has(key)) {
           const ovVevent = overrides.get(key);
           if ((ovVevent.getFirstPropertyValue('status') || '').toString().toUpperCase() === 'CANCELLED') continue;
+          if (isDeclinedByOwner(ovVevent, ownerEmail)) continue;
           const ov = new ICAL.Event(ovVevent);
           out.push({
             uid: event.uid,
@@ -199,6 +221,7 @@ function parseEvents(icsText) {
 
   for (const [, v] of overrides) {
     if ((v.getFirstPropertyValue('status') || '').toString().toUpperCase() === 'CANCELLED') continue;
+    if (isDeclinedByOwner(v, ownerEmail)) continue;
     const ov = new ICAL.Event(v);
     const start = ov.startDate;
     if (!start) continue;
