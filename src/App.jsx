@@ -705,16 +705,16 @@ export default function App() {
             dragState={dragState} setDragState={setDragState}>
             <AddTask onAdd={addTask} section="active" placeholder="+ Draft… Review… Send… (@label #deadline:YYYY-MM-DD)"/>
           </Section>
-          {icalUrls.length > 0 && (
-            <CalendarPanel events={events} pinnedIds={pinnedIds} showSource={icalUrls.length > 1} colorBySource={colorBySource}
-              onPin={pinEvent} onUnpinByInstance={unpinByInstance} pinInFlight={pinInFlight}
-              loading={icsLoading} error={icsError} onRetry={()=>refetchEvents({force:true})}/>
-          )}
           <Section id="inbox" label="Inbox" tasks={allTasks} collapsed={true} urgentCount={urgent('inbox')}
             onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
             dragState={dragState} setDragState={setDragState}>
             <AddTask onAdd={addTask} section="inbox" placeholder="+ Quick capture (start with a verb)"/>
           </Section>
+          {icalUrls.length > 0 && (
+            <CalendarPanel events={events} pinnedIds={pinnedIds} showSource={icalUrls.length > 1} colorBySource={colorBySource}
+              onPin={pinEvent} onUnpinByInstance={unpinByInstance} pinInFlight={pinInFlight}
+              loading={icsLoading} error={icsError} onRetry={()=>refetchEvents({force:true})}/>
+          )}
           <Section id="waiting" label="Waiting" tasks={allTasks} collapsed={true} urgentCount={urgent('waiting')}
             onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
             dragState={dragState} setDragState={setDragState}/>
