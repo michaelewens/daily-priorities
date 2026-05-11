@@ -63,7 +63,7 @@ export async function ensureSetup(token) {
   }
 
   const sections = await getSections(token, project.id);
-  const needed = ['Today', 'Active', 'Inbox', 'Waiting', 'Radar'];
+  const needed = ['Today', 'Active', 'Inbox', 'Waiting', 'Radar', 'Projects'];
   const sectionMap = {};
 
   for (let i = 0; i < needed.length; i++) {

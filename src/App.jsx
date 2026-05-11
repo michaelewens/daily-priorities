@@ -364,6 +364,50 @@ function RadarPanel({ tasks, onUnpin, unpinInFlight, colorBySource }) {
   );
 }
 
+function ProjectsRail({ tasks }) {
+  const c = useColors();
+  const CATEGORIES = [
+    { key: 'research', label: 'RESEARCH', color: '#8a5cd9' },
+    { key: 'columbia', label: 'COLUMBIA', color: '#4a90d9' },
+    { key: 'teaching', label: 'TEACHING', color: '#4ad9a0' },
+    { key: 'personal', label: 'PERSONAL', color: '#d9734a' },
+  ];
+  const projects = tasks.filter(t => t._section === 'projects');
+  if (projects.length === 0) return null;
+  const byCategory = {};
+  for (const t of projects) {
+    const cat = CATEGORIES.find(cat => t.labels?.includes(cat.key));
+    if (!cat) continue;
+    (byCategory[cat.key] = byCategory[cat.key] || []).push(t);
+  }
+  for (const k in byCategory) {
+    byCategory[k].sort((a, b) => (a._order ?? 9999) - (b._order ?? 9999));
+  }
+  const rows = CATEGORIES.filter(cat => byCategory[cat.key]?.length);
+  if (rows.length === 0) return null;
+  const cleanName = (s) => s.replace(/^\*\s+/, '').trim();
+  return (
+    <div style={{marginBottom: 24, padding: '4px 12px'}}>
+      {rows.map(cat => (
+        <div key={cat.key} style={{display: 'flex', alignItems: 'baseline', gap: 12, padding: '2px 0', fontSize: 12, lineHeight: 1.7}}>
+          <span style={{
+            fontFamily: "'IBM Plex Mono', monospace",
+            fontWeight: 600,
+            color: cat.color,
+            fontSize: 10,
+            letterSpacing: '0.08em',
+            minWidth: 70,
+            flexShrink: 0,
+          }}>{cat.label}</span>
+          <span style={{color: c.textMuted, fontFamily: "'IBM Plex Sans', sans-serif", flex: 1}}>
+            {byCategory[cat.key].map(t => cleanName(t.content)).join(' · ')}
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function CalendarPanel({ events, pinnedIds, onPin, onUnpinByInstance, pinInFlight, loading, error, onRetry, showSource, colorBySource }) {
   const c = useColors();
   const byDay = new Map();
@@ -480,7 +524,7 @@ export default function App() {
   // Migrate legacy setups that predate the Radar section.
   useEffect(()=>{
     if(!token || !setup) return;
-    if(setup.sectionMap?.radar) return;
+    if(setup.sectionMap?.radar && setup.sectionMap?.projects) return;
     (async()=>{
       try{
         const s = await ensureSetup(token);
@@ -686,6 +730,8 @@ export default function App() {
             </div>
           </div>
           {error&&<div style={{padding:'8px 12px',marginBottom:16,background:colors.dangerDim,borderRadius:6,fontSize:12,color:colors.danger}}>{error}</div>}
+
+          <ProjectsRail tasks={allTasks}/>
 
           <div style={{display:'flex',gap:16,alignItems:'flex-start',flexWrap:'wrap'}}>
             <div style={{flex:'1 1 320px',minWidth:280}}>
