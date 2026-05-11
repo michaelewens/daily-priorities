@@ -731,7 +731,7 @@ export default function App() {
     <ThemeCtx.Provider value={colors}>
       <link href={fontLink} rel="stylesheet"/>
       <div style={{minHeight:'100vh',background:colors.bg,color:colors.text,fontFamily:"'IBM Plex Sans',sans-serif",padding:'40px 0',display:'flex',justifyContent:'center'}}>
-        <div style={{width:'100%',maxWidth:(icalUrls.length>0||hasProjects)?760:560,padding:'0 20px'}}>
+        <div style={{width:'100%',maxWidth:hasProjects?760:560,padding:'0 20px'}}>
           <div style={{marginBottom:32,display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
             <div>
               <div style={{fontSize:12,fontFamily:"'IBM Plex Mono',monospace",color:colors.textFaint,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>{todayDate}</div>
@@ -751,13 +751,13 @@ export default function App() {
               <Section id="today" label="Today" tasks={allTasks} cap={MAX_TODAY}
                 onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
                 dragState={dragState} setDragState={setDragState} accentColor={colors.accent}/>
+              {icalUrls.length > 0 && (
+                <RadarPanel tasks={radarTasks} onUnpin={unpinById} unpinInFlight={pinInFlight} colorBySource={colorBySource}/>
+              )}
             </div>
-            {(hasProjects || icalUrls.length > 0) && (
+            {hasProjects && (
               <div style={{flex:'1 1 320px',minWidth:280}}>
-                {hasProjects && <ProjectsRail tasks={allTasks}/>}
-                {icalUrls.length > 0 && (
-                  <RadarPanel tasks={radarTasks} onUnpin={unpinById} unpinInFlight={pinInFlight} colorBySource={colorBySource}/>
-                )}
+                <ProjectsRail tasks={allTasks}/>
               </div>
             )}
           </div>
