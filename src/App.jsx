@@ -386,24 +386,38 @@ function ProjectsRail({ tasks }) {
   const rows = CATEGORIES.filter(cat => byCategory[cat.key]?.length);
   if (rows.length === 0) return null;
   const cleanName = (s) => s.replace(/^\*\s+/, '').trim();
+  const total = projects.length;
   return (
-    <div style={{marginBottom: 24, padding: '4px 12px'}}>
-      {rows.map(cat => (
-        <div key={cat.key} style={{display: 'flex', alignItems: 'baseline', gap: 12, padding: '2px 0', fontSize: 12, lineHeight: 1.7}}>
-          <span style={{
-            fontFamily: "'IBM Plex Mono', monospace",
-            fontWeight: 600,
-            color: cat.color,
-            fontSize: 10,
-            letterSpacing: '0.08em',
-            minWidth: 70,
-            flexShrink: 0,
-          }}>{cat.label}</span>
-          <span style={{color: c.textMuted, fontFamily: "'IBM Plex Sans', sans-serif", flex: 1}}>
-            {byCategory[cat.key].map(t => cleanName(t.content)).join(' · ')}
-          </span>
-        </div>
-      ))}
+    <div style={{marginBottom: 24}}>
+      <div style={{display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px'}}>
+        <span style={{fontSize: 14, fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600, color: c.textMuted, letterSpacing: '0.08em', textTransform: 'uppercase'}}>Projects</span>
+        <span style={{fontSize: 10, fontFamily: "'IBM Plex Mono', monospace", color: c.textFaint}}>{total}</span>
+      </div>
+      <div style={{background: c.todayBg, borderRadius: 8, border: `1px solid ${c.border}`, padding: '8px 12px'}}>
+        {rows.map((cat, idx) => (
+          <div key={cat.key} style={{marginTop: idx === 0 ? 0 : 10}}>
+            <div style={{
+              fontSize: 10,
+              fontFamily: "'IBM Plex Mono', monospace",
+              fontWeight: 600,
+              color: cat.color,
+              letterSpacing: '0.08em',
+              marginBottom: 3,
+            }}>{cat.label}</div>
+            {byCategory[cat.key].map(t => (
+              <div key={t.id} style={{
+                fontSize: 12,
+                color: c.textMuted,
+                fontFamily: "'IBM Plex Sans', sans-serif",
+                lineHeight: 1.5,
+                paddingLeft: 4,
+              }}>
+                {cleanName(t.content)}
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -611,6 +625,7 @@ export default function App() {
 
   const colorBySource = useMemo(()=>buildColorMap(icalUrls),[icalUrls]);
   const radarTasks = useMemo(()=>enriched.filter(t=>t._section==='radar'),[enriched]);
+  const hasProjects = useMemo(()=>enriched.some(t=>t._section==='projects'),[enriched]);
   const pinnedIds = useMemo(()=>new Set(radarTasks.map(t=>parseRadarMetadata(t.description)?.id).filter(Boolean)),[radarTasks]);
 
   const refetchEvents = useCallback(async(opts={})=>{
@@ -716,7 +731,7 @@ export default function App() {
     <ThemeCtx.Provider value={colors}>
       <link href={fontLink} rel="stylesheet"/>
       <div style={{minHeight:'100vh',background:colors.bg,color:colors.text,fontFamily:"'IBM Plex Sans',sans-serif",padding:'40px 0',display:'flex',justifyContent:'center'}}>
-        <div style={{width:'100%',maxWidth:(icalUrls.length>0)?760:560,padding:'0 20px'}}>
+        <div style={{width:'100%',maxWidth:(icalUrls.length>0||hasProjects)?760:560,padding:'0 20px'}}>
           <div style={{marginBottom:32,display:'flex',justifyContent:'space-between',alignItems:'flex-start'}}>
             <div>
               <div style={{fontSize:12,fontFamily:"'IBM Plex Mono',monospace",color:colors.textFaint,letterSpacing:'0.1em',textTransform:'uppercase',marginBottom:4}}>{todayDate}</div>
@@ -731,17 +746,18 @@ export default function App() {
           </div>
           {error&&<div style={{padding:'8px 12px',marginBottom:16,background:colors.dangerDim,borderRadius:6,fontSize:12,color:colors.danger}}>{error}</div>}
 
-          <ProjectsRail tasks={allTasks}/>
-
           <div style={{display:'flex',gap:16,alignItems:'flex-start',flexWrap:'wrap'}}>
             <div style={{flex:'1 1 320px',minWidth:280}}>
               <Section id="today" label="Today" tasks={allTasks} cap={MAX_TODAY}
                 onComplete={completeTask} onMove={moveTask} onDelete={handleDelete} onEdit={handleEdit}
                 dragState={dragState} setDragState={setDragState} accentColor={colors.accent}/>
             </div>
-            {icalUrls.length > 0 && (
+            {(hasProjects || icalUrls.length > 0) && (
               <div style={{flex:'1 1 320px',minWidth:280}}>
-                <RadarPanel tasks={radarTasks} onUnpin={unpinById} unpinInFlight={pinInFlight} colorBySource={colorBySource}/>
+                {hasProjects && <ProjectsRail tasks={allTasks}/>}
+                {icalUrls.length > 0 && (
+                  <RadarPanel tasks={radarTasks} onUnpin={unpinById} unpinInFlight={pinInFlight} colorBySource={colorBySource}/>
+                )}
               </div>
             )}
           </div>
